@@ -1,0 +1,71 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Copy, Crown, DoorOpen, Flag, Gamepad2, LogOut, Play, RotateCcw, Shield, Skull, Users, Volume2, Wifi, WifiOff } from 'lucide-react';
+import { RLGLClient, type RoomState, type PlayerState } from './rlglClient';
+
+const SERVER_URL = window.RUNTIME_CONFIG?.GAME_SERVER_URL || (import.meta as any).env.VITE_GAME_SERVER_URL || 'http://localhost:3001';
+type Identity = { roomCode: string; playerId: string; playerToken: string };
+const STORE_KEY = 'rlgl-identity-v1';
+const client = new RLGLClient(SERVER_URL);
+
+function App() {
+  const [identity,setIdentity] = useState<Identity|null>(() => { try { return JSON.parse(localStorage.getItem(STORE_KEY)||'null'); } catch { return null; } });
+  const [room,setRoom] = useState<RoomState|null>(null);
+  const [handle,setHandle] = useState('Player');
+  const [joinCode,setJoinCode] = useState('');
+  const [connected,setConnected] = useState(client.connected);
+  const [busy,setBusy] = useState(false);
+  const [error,setError] = useState('');
+  const [notice,setNotice] = useState('');
+  const [green,setGreen] = useState(10);
+  const [red,setRed] = useState(6);
+  const [autoElimination,setAutoElimination] = useState(true);
+  const [now,setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const socket = (client as any).socket;
+    const onConnect=()=>setConnected(true), onDisconnect=()=>setConnected(false);
+    socket.on('connect',onConnect); socket.on('disconnect',onDisconnect);
+    const offState=client.onState((s)=>{setRoom(s);setGreen(s.greenSeconds);setRed(s.redSeconds);setAutoElimination(s.autoElimination);});
+    const offElim=client.onEliminated(({playerId,reason})=>{if(playerId===identity?.playerId)setNotice(`ELIMINATED — ${reason}`);});
+    const offWinner=client.onWinner(({playerId})=>{if(playerId===identity?.playerId)setNotice('YOU MADE IT TO THE FINISH LINE');});
+    const offKick=client.onKicked(({playerId})=>{if(playerId===identity?.playerId){clearIdentity();setError('You were removed from this room.');}});
+    const offClose=client.onClosed(()=>{setRoom(null);clearIdentity();setError('The room was closed.');});
+    const timer=window.setInterval(()=>setNow(Date.now()),150);
+    if(identity){ client.reconnect(identity.roomCode,identity.playerToken).then(c=>{setRoom(c.state);}).catch(e=>{clearIdentity();setError(e.message);}); }
+    return ()=>{socket.off('connect',onConnect);socket.off('disconnect',onDisconnect);offState();offElim();offWinner();offKick();offClose();window.clearInterval(timer);};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  function clearIdentity(){localStorage.removeItem(STORE_KEY);setIdentity(null);setRoom(null);}
+  function saveCredentials(c:any){const v={roomCode:c.roomCode,playerId:c.playerId,playerToken:c.playerToken};localStorage.setItem(STORE_KEY,JSON.stringify(v));setIdentity(v);setRoom(c.state);setError('');setNotice('');}
+  async function act(fn:()=>Promise<any>, success?:string){setBusy(true);setError('');try{await fn();if(success)setNotice(success);}catch(e:any){setError(e?.message||'Something went wrong');}finally{setBusy(false);}}
+  async function createRoom(){await act(async()=>saveCredentials(await client.create(handle)),'ROOM CREATED — SHARE YOUR CODE');}
+  async function joinRoom(){await act(async()=>saveCredentials(await client.join(joinCode.toUpperCase(),handle)),'JOINED THE ROOM');}
+  async function leave(){await act(async()=>{await client.leave();clearIdentity();},'YOU LEFT THE ROOM');}
+  async function saveSettings(){await act(()=>client.updateSettings({greenSeconds:green,redSeconds:red,autoElimination}),'SETTINGS SAVED');}
+  const me = room?.players.find(p=>p.id===identity?.playerId);
+  const isHost = !!room && room.hostPlayerId===identity?.playerId;
+  const secondsLeft = room?.remainingMs ? Math.ceil(room.remainingMs/1000) : 0;
+  const phase = room?.phase || 'waiting';
+  const alive = room?.players.filter(p=>p.alive).length||0;
+  const winners = room?.players.filter(p=>p.won)||[];
+  const sortedPlayers = useMemo(()=>[...(room?.players||[])].sort((a,b)=>Number(b.won)-Number(a.won)||Number(b.alive)-Number(a.alive)||b.progress-a.progress),[room?.players]);
+  const [copied,setCopied]=useState(false);
+  async function copyCode(){if(!room)return;try{await navigator.clipboard.writeText(room.roomCode);setCopied(true);window.setTimeout(()=>setCopied(false),1400);}catch{setError('Clipboard unavailable — copy the code manually.');}}
+
+  if(!room || !identity) return <main className="page"><header className="topbar"><div className="brand"><span className="brand-mark">○</span> SQUID GAME <span className="brand-sub">/ RED LIGHT GREEN LIGHT</span></div><div className="connection"><i className={connected?'online':''}/>{connected?'SERVER CONNECTED':'CONNECTING'}</div></header><section className="hero"><div className="hero-kicker">THE PLAYGROUND IS OPEN</div><h1>DON'T MOVE.<br/><em>DON'T GET CAUGHT.</em></h1><p>One finish line. Thirty players. One rule: move only when the light is green.</p><div className="hero-art"><div className="sun"/><div className="doll">◉</div><div className="track"><span>START</span><span>FINISH</span></div></div></section><section className="entry-grid"><div className="panel"><div className="panel-heading"><span className="step">01</span><h2>CREATE A ROOM</h2></div><p className="muted">Become the host. Set the rules and invite up to 29 other players.</p><label>YOUR PLAYER HANDLE</label><input value={handle} maxLength={18} onChange={e=>setHandle(e.target.value)} placeholder="Enter a handle"/><button className="primary full" disabled={busy||!connected||!handle.trim()} onClick={createRoom}><Play size={17}/> CREATE ROOM</button></div><div className="panel join-panel"><div className="panel-heading"><span className="step">02</span><h2>JOIN A ROOM</h2></div><p className="muted">Got a six-character room code? Enter it to join the game.</p><label>YOUR PLAYER HANDLE</label><input value={handle} maxLength={18} onChange={e=>setHandle(e.target.value)} placeholder="Enter a handle"/><label>ROOM CODE</label><input className="code-input" value={joinCode} maxLength={6} onChange={e=>setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z2-9]/g,''))} placeholder="ABC123"/><button className="secondary full" disabled={busy||!connected||!handle.trim()||joinCode.length!==6} onClick={joinRoom}><DoorOpen size={17}/> JOIN ROOM</button></div></section>{(error||notice)&&<div className={error?'alert error':'alert'}>{error||notice}</div>}<footer>SERVER-AUTHORITATIVE GAMEPLAY <span>•</span> MAX 30 PLAYERS <span>•</span> AUTOMATIC ELIMINATION</footer></main>;
+
+  return <main className="page game-page"><header className="topbar"><div className="brand"><span className="brand-mark">○</span> SQUID GAME <span className="brand-sub">/ RED LIGHT GREEN LIGHT</span></div><div className="top-actions"><div className="connection"><i className={connected?'online':''}/>{connected?'CONNECTED':'RECONNECTING'}</div><button className="ghost" onClick={leave}><LogOut size={15}/> LEAVE</button></div></header>
+    <section className={`game-banner ${phase}`}><div className="banner-meta"><span>ROOM {room.roomCode}</span><button className="copy-btn" onClick={copyCode}><Copy size={14}/>{copied?'COPIED':'COPY CODE'}</button><span>ROUND {room.round}</span></div><div className="signal-wrap"><div className="signal"><span className={phase==='green'?'lit-green':''}/><span className={phase==='red'?'lit-red':''}/></div><div><div className="phase-label">{phase==='green'?'GREEN LIGHT':phase==='red'?'RED LIGHT':phase==='paused'?'GAME PAUSED':phase==='finished'?'GAME OVER':'WAITING ROOM'}</div><div className="phase-sub">{phase==='green'?'RUN FOR THE FINISH':phase==='red'?'FREEZE — ANY MOVE CAN ELIMINATE YOU':phase==='paused'?'THE HOST HAS PAUSED THE GAME':phase==='finished'?'THE ROUND HAS ENDED':'WAITING FOR THE HOST TO START'}</div></div><div className="countdown">{phase==='green'||phase==='red'?String(secondsLeft).padStart(2,'0'):'—'}<small>SECONDS</small></div></div><div className="banner-stats"><span><Users size={15}/> {room.players.length}/30 PLAYERS</span><span><Shield size={15}/> {alive} STILL IN</span><span><Flag size={15}/> {winners.length} FINISHED</span></div></section>
+    {(error||notice)&&<div className={error?'alert error':'alert'}>{error||notice}<button onClick={()=>{setError('');setNotice('');}}>×</button></div>}
+    <div className="game-layout"><section className="arena-column"><div className="panel arena-panel"><div className="section-head"><div><div className="eyebrow">THE PLAYING FIELD</div><h2>THE RACE</h2></div><span className="live-tag"><i/> LIVE ROOM</span></div><div className={`arena ${phase}`}><div className="arena-sky"><div className="arena-sun"/><div className="arena-doll">◉</div><div className="arena-horizon"/></div><div className="race-track"><div className="start-line">START</div><div className="finish-line">FINISH</div>{room.players.map((p,i)=><div key={p.id} className={`runner ${!p.alive?'dead':''} ${p.won?'winner':''} ${p.id===identity.playerId?'you':''}`} style={{left:`${Math.max(2,Math.min(96,p.progress))}%`,top:`${14+(i%7)*10}%`}} title={`${p.handle} — ${p.progress}%`}>{p.won?'★':p.alive?'●':'✕'}</div>)}</div><div className="arena-caption"><span>YOUR PROGRESS</span><strong>{me?.progress||0}%</strong></div><div className="progress-track"><div style={{width:`${me?.progress||0}%`}}/></div></div><div className="controls"><div className="control-copy"><strong>{me?.won?'FINISH LINE REACHED':!me?.alive?'YOU HAVE BEEN ELIMINATED':phase==='green'?'MOVE NOW':'HOLD YOUR POSITION'}</strong><span>{phase==='green'?'Tap MOVE to advance during green light.':phase==='red'?'Any move now will trigger elimination.':'Wait for the host to start or resume.'}</span></div><button className="move-btn" disabled={busy||(phase!=='green'&&phase!=='red')||!me?.alive||!!me?.won} onClick={()=>act(()=>client.move(2))}>{phase==='red'?'RISK IT':'MOVE'} <span>→</span></button></div></div>
+      <div className="panel roster-panel"><div className="section-head"><div><div className="eyebrow">COMPETITORS</div><h2>PLAYER ROSTER <small>{room.players.length} / 30</small></h2></div><div className="legend"><span><i className="dot alive-dot"/>ALIVE</span><span><i className="dot dead-dot"/>OUT</span><span><i className="dot win-dot"/>FINISHED</span></div></div><div className="roster">{sortedPlayers.map((p,i)=><PlayerRow key={p.id} player={p} mine={p.id===identity.playerId} host={p.id===room.hostPlayerId} canKick={isHost&&p.id!==identity.playerId&&room.phase==='waiting'} onKick={()=>act(()=>client.kick(p.id))}/>)}</div></div></section>
+      <aside className="side-column"><div className="panel profile-panel"><div className="eyebrow">YOUR PLAYER IDENTITY</div><div className="profile-avatar">{me?.handle.slice(0,1).toUpperCase()}</div><div className="profile-name">{me?.handle}</div><div className="profile-role">{isHost?'ROOM HOST':'PLAYER'} · {me?.alive?'ACTIVE':me?.won?'FINISHED':'ELIMINATED'}</div><label>EDIT HANDLE</label><div className="inline-input"><input value={handle} maxLength={18} onChange={e=>setHandle(e.target.value)}/><button onClick={()=>act(()=>client.updateHandle(handle),'HANDLE UPDATED')} disabled={busy||!handle.trim()}>SAVE</button></div></div>
+      {isHost&&<div className="panel host-panel"><div className="section-head"><div><div className="eyebrow">GAME MASTER</div><h2>HOST CONTROLS</h2></div><Crown size={19}/></div><div className="host-actions">{phase==='waiting'&&<button className="primary full" disabled={busy} onClick={()=>act(()=>client.start(),'GAME STARTED')}><Play size={16}/> START GAME</button>}{(phase==='green'||phase==='red')&&<button className="secondary full" disabled={busy} onClick={()=>act(()=>client.pause(),'GAME PAUSED')}>Ⅱ PAUSE GAME</button>}{phase==='paused'&&<button className="primary full" disabled={busy} onClick={()=>act(()=>client.resume(),'GAME RESUMED')}><Play size={16}/> RESUME GAME</button>}<button className="outline full" disabled={busy||phase==='waiting'} onClick={()=>act(()=>client.reset(),'GAME RESET')}><RotateCcw size={15}/> RESET ROUND</button></div><div className="settings"><div className="setting-head">ROUND SETTINGS</div><label>GREEN LIGHT <b>{green}s</b></label><input type="range" min="3" max="30" value={green} onChange={e=>setGreen(+e.target.value)}/><label>RED LIGHT <b>{red}s</b></label><input type="range" min="2" max="20" value={red} onChange={e=>setRed(+e.target.value)}/><label className="toggle-label">AUTO-ELIMINATION <input type="checkbox" checked={autoElimination} onChange={e=>setAutoElimination(e.target.checked)}/></label><button className="save-settings" disabled={busy||phase!=='waiting'} onClick={saveSettings}>SAVE SETTINGS</button><small>Settings lock when the game starts.</small></div></div>}
+      <div className="panel rules-panel"><div className="eyebrow">HOW TO SURVIVE</div><h2>THE RULES</h2><ol><li>Move only during <b>GREEN LIGHT</b>.</li><li>During <b>RED LIGHT</b>, do not move.</li><li>Moving on red triggers automatic elimination when enabled.</li><li>Reach 100% progress to finish.</li></ol><div className="rules-foot"><Shield size={15}/> GAME ACTIONS ARE VERIFIED BY THE SERVER</div></div></aside></div><footer>ROOM {room.roomCode} <span>•</span> MAX 30 PLAYERS <span>•</span> {isHost?'YOU CONTROL THIS GAME':'FOLLOW THE HOST'}</footer></main>;
+}
+
+function PlayerRow({player, mine, host, canKick, onKick}:{player:PlayerState;mine:boolean;host:boolean;canKick:boolean;onKick:()=>void}) {
+ return <div className={`player-row ${mine?'mine':''}`}><div className={`player-token ${player.won?'won':!player.alive?'out':''}`}>{player.won?'★':player.alive?player.handle.slice(0,1).toUpperCase():'×'}</div><div className="player-info"><strong>{player.handle} {mine&&<small>YOU</small>} {host&&<Crown size={12}/>}</strong><span>{player.won?'FINISHED':player.alive?'IN THE GAME':'ELIMINATED'} · {player.progress}%</span></div><div className="mini-progress"><i style={{width:`${player.progress}%`}}/></div><span className={`status-dot ${player.alive?'active':player.won?'finished':'eliminated'}`}/>{canKick&&<button className="kick" onClick={onKick} title="Remove player">×</button>}</div>;
+}
+export default App;

@@ -1,0 +1,25 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+model RoomRecord {
+  id        String   @id
+  code      String   @unique
+  createdAt DateTime @default(now())
+  closedAt  DateTime?
+  status    String   @default("WAITING")
+  @@index([status, createdAt])
+}
+model PlayerRecord {
+  id          String   @id
+  roomId      String
+  handle      String
+  tokenHash   String
+  joinedAt    DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  eliminated  Boolean  @default(false)
+  @@index([roomId, joinedAt])
+}
